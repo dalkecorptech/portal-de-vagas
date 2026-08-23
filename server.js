@@ -6,7 +6,20 @@ const jwt = require('jsonwebtoken');
 const { Pool } = require('pg');
 
 const app = express();
-app.use(cors());
+// Configuração de segurança CORS
+const corsOptions = {
+    origin: [
+        'https://nome-do-seu-projeto.vercel.app', // Substitua pela URL real gerada pela Vercel
+        'http://localhost:5500', // Para você testar no seu computador
+        'http://localhost:3000'
+    ],
+    methods: 'GET,HEAD,PUT,PATCH,POST,DELETE',
+    credentials: true,
+    optionsSuccessStatus: 204
+};
+
+app.use(cors(corsOptions));
+
 app.use(express.json());
 
 // Configuração de Conexão com o PostgreSQL (Neon.tech)
