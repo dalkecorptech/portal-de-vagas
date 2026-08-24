@@ -9,7 +9,7 @@ const app = express();
 // Configuração de segurança CORS
 const corsOptions = {
     origin: [
-        'https://nome-do-seu-projeto.vercel.app', // Substitua pela URL real gerada pela Vercel
+        'https://portal-de-vagas-frontend.vercel.app', // Substitua pela URL real gerada pela Vercel
         'http://localhost:5500', // Para você testar no seu computador
         'http://localhost:3000'
     ],
