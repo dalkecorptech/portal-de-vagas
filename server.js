@@ -19,7 +19,6 @@ const corsOptions = {
 };
 
 app.use(cors(corsOptions));
-
 app.use(express.json());
 
 // Configuração de Conexão com o PostgreSQL (Neon.tech)
@@ -59,74 +58,122 @@ const requireRole = (role) => {
 // ROTAS DE AUTENTICAÇÃO (RNF-04)
 // ==========================================
 
-// 1. Cadastro de Usuário (Exemplo focado na Empresa para permitir postagem)
-app.post('/api/auth/register', async (req, res) => {
-    const { email, senha, tipo_usuario, nome_fantasia, cnpj } = req.body;
-    
-    if (!['admin', 'candidato', 'empresa'].includes(tipo_usuario)) {
+// 1. Rota POST /api/auth/cadastro
+app.post('/api/auth/cadastro', async (req, res) => {
+    const { email, senha, tipo_usuario, nome, documento } = req.body;
+
+    // Validação básica do tipo de usuário
+    if (!['candidato', 'empresa'].includes(tipo_usuario)) {
         return res.status(400).json({ error: 'Tipo de usuário inválido.' });
     }
 
+    // Solicita um client isolado do pool para gerenciar a transação SQL
     const client = await pool.connect();
-    try {
-        await client.query('BEGIN'); // Inicia a transação
 
-        // Criptografa a senha
+    try {
+        await client.query('BEGIN'); // Inicia a transação SQL
+
+        // 1. Verifica se o e-mail já está cadastrado na tabela usuarios
+        const emailCheck = await client.query('SELECT id FROM usuarios WHERE email = $1', [email]);
+        if (emailCheck.rows.length > 0) {
+            throw new Error('Este e-mail já está em uso.');
+        }
+
+        // 2. Verifica se o documento (CPF ou CNPJ) já existe na respectiva tabela
+        if (tipo_usuario === 'candidato') {
+            const cpfCheck = await client.query('SELECT id FROM candidatos WHERE cpf = $1', [documento]);
+            if (cpfCheck.rows.length > 0) throw new Error('Este CPF já está cadastrado.');
+        } else if (tipo_usuario === 'empresa') {
+            const cnpjCheck = await client.query('SELECT id FROM empresas WHERE cnpj = $1', [documento]);
+            if (cnpjCheck.rows.length > 0) throw new Error('Este CNPJ já está cadastrado.');
+        }
+
+        // 3. Criptografa a senha com bcrypt
         const salt = await bcrypt.genSalt(10);
         const senhaHash = await bcrypt.hash(senha, salt);
 
-        // Insere na tabela 'usuarios'
-        const userResult = await client.query(
+        // 4. Salva na tabela base 'usuarios' e recupera o ID gerado
+        const insertUsuario = await client.query(
             'INSERT INTO usuarios (email, senha, tipo_usuario) VALUES ($1, $2, $3) RETURNING id, email, tipo_usuario',
             [email, senhaHash, tipo_usuario]
         );
-        const novoUsuario = userResult.rows[0];
+        const novoUsuario = insertUsuario.rows[0];
 
-        // Se for empresa, cria o perfil correspondente
-        if (tipo_usuario === 'empresa') {
+        // 5. Salva na tabela específica (Candidato ou Empresa) usando o ID do usuário criado
+        if (tipo_usuario === 'candidato') {
+            await client.query(
+                'INSERT INTO candidatos (usuario_id, nome, cpf) VALUES ($1, $2, $3)',
+                [novoUsuario.id, nome, documento]
+            );
+        } else if (tipo_usuario === 'empresa') {
             await client.query(
                 'INSERT INTO empresas (usuario_id, nome_fantasia, cnpj) VALUES ($1, $2, $3)',
-                [novoUsuario.id, nome_fantasia, cnpj]
+                [novoUsuario.id, nome, documento]
             );
         }
-        // Nota: Para 'candidatos', você adicionaria a lógica correspondente aqui.
 
-        await client.query('COMMIT');
-        res.status(201).json({ message: 'Usuário cadastrado com sucesso!', usuario: novoUsuario });
+        await client.query('COMMIT'); // Confirma a transação
+        
+        res.status(201).json({ 
+            message: 'Cadastro realizado com sucesso!', 
+            usuario: novoUsuario 
+        });
+
     } catch (error) {
-        await client.query('ROLLBACK');
+        await client.query('ROLLBACK'); // Desfaz tudo em caso de erro para manter a integridade
         console.error('Erro no cadastro:', error);
-        res.status(500).json({ error: 'Erro ao registrar usuário. Verifique se o email ou documento já existe.' });
+        
+        // Retorna o erro específico que disparamos ou um erro genérico
+        const errorMessage = error.message.includes('já') ? error.message : 'Erro interno ao realizar o cadastro.';
+        res.status(400).json({ error: errorMessage });
     } finally {
-        client.release();
+        client.release(); // Libera o client de volta para o pool
     }
 });
 
-// 2. Login e Geração de JWT
+
+// 2. Rota POST /api/auth/login
 app.post('/api/auth/login', async (req, res) => {
     const { email, senha } = req.body;
 
     try {
-        const result = await pool.query('SELECT * FROM usuarios WHERE email = $1', [email]);
-        if (result.rows.length === 0) {
-            return res.status(401).json({ error: 'Email ou senha incorretos.' });
+        // 1. Busca o usuário pelo e-mail
+        const userResult = await pool.query('SELECT * FROM usuarios WHERE email = $1', [email]);
+        
+        if (userResult.rows.length === 0) {
+            return res.status(401).json({ error: 'Credenciais inválidas.' }); // Evita expor que o email não existe
         }
 
-        const usuario = result.rows[0];
+        const usuario = userResult.rows[0];
+
+        // 2. Compara a senha digitada com a senha criptografada do banco
         const senhaValida = await bcrypt.compare(senha, usuario.senha);
 
         if (!senhaValida) {
-            return res.status(401).json({ error: 'Email ou senha incorretos.' });
+            return res.status(401).json({ error: 'Credenciais inválidas.' });
         }
 
-        // Gera o Token JWT
+        // 3. Gera o Token JWT contendo apenas as informações essenciais
         const token = jwt.sign(
-            { id: usuario.id, email: usuario.email, tipo_usuario: usuario.tipo_usuario },
+            { 
+                id: usuario.id, 
+                tipo_usuario: usuario.tipo_usuario 
+            },
             JWT_SECRET,
             { expiresIn: '24h' }
         );
 
-        res.json({ message: 'Login bem-sucedido', token, tipo_usuario: usuario.tipo_usuario });
+        // 4. Retorna os dados com sucesso
+        res.json({
+            message: 'Login bem-sucedido!',
+            token: token,
+            usuario: {
+                id: usuario.id,
+                email: usuario.email,
+                tipo_usuario: usuario.tipo_usuario
+            }
+        });
+
     } catch (error) {
         console.error('Erro no login:', error);
         res.status(500).json({ error: 'Erro interno do servidor.' });
@@ -211,4 +258,4 @@ const PORT = process.env.PORT || 3000;
 app.listen(PORT, () => {
     console.log(`Servidor rodando na porta ${PORT}`);
 });
-                                     
+                                              
