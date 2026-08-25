@@ -18,8 +18,7 @@ const corsOptions = {
     optionsSuccessStatus: 204
 };
 app.use(cors(corsOptions));
-// Limite ampliado para aceitar PDFs e DOCs em Base64 no body JSON
-app.use(express.json({ limit: '10mb' }));
+app.use(express.json({ limit: '10mb' })); // Limite ampliado para currículos/anexos
 
 const pool = new Pool({
     connectionString: process.env.DATABASE_URL,
@@ -158,16 +157,7 @@ app.post('/api/curriculo', authenticateToken, requireRole('candidato'), async (r
             RETURNING candidato_id, arquivo_nome;
         `;
         
-        const values = [
-            candidatoId,
-            resumo_profissional || '',
-            habArray,
-            experiencias ? JSON.stringify(experiencias) : '[]',
-            formacao_academica ? JSON.stringify(formacao_academica) : '[]',
-            arquivo_nome || null,
-            arquivo_dados || null
-        ];
-
+        const values = [candidatoId, resumo_profissional || '', habArray, experiencias ? JSON.stringify(experiencias) : '[]', formacao_academica ? JSON.stringify(formacao_academica) : '[]', arquivo_nome || null, arquivo_dados || null];
         const result = await pool.query(query, values);
         res.status(200).json({ message: 'Currículo e anexo salvos com sucesso!', curriculo: result.rows[0] });
     } catch (error) {
@@ -213,6 +203,21 @@ app.get('/api/vagas', async (req, res) => {
     }
 });
 
+// NOVA ROTA: Listar Vagas da Empresa Logada
+app.get('/api/empresa/vagas', authenticateToken, requireRole('empresa'), async (req, res) => {
+    try {
+        const empresaResult = await pool.query('SELECT id FROM empresas WHERE usuario_id = $1', [req.user.id]);
+        if (empresaResult.rows.length === 0) return res.status(404).json({ error: 'Empresa não encontrada.' });
+        
+        const empresaId = empresaResult.rows[0].id;
+        const result = await pool.query('SELECT * FROM vagas WHERE empresa_id = $1 ORDER BY data_publicacao DESC', [empresaId]);
+        
+        res.json(result.rows);
+    } catch (error) {
+        console.error('Erro ao buscar vagas da empresa:', error);
+        res.status(500).json({ error: 'Erro interno ao buscar as vagas.' });
+    }
+});
+
 const PORT = process.env.PORT || 3000;
 app.listen(PORT, () => console.log(`Servidor rodando na porta ${PORT}`));
-    
