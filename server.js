@@ -207,37 +207,51 @@ app.post('/api/ia/processar-curriculo', authenticateToken, requireRole('candidat
         const apiKey = process.env.GEMINI_API_KEY;
         if (!apiKey) throw new Error('GEMINI_API_KEY não configurada no ambiente do Render.');
 
-        // System Instruction rígida para garantir o contrato de retorno
+        // Instrução rígida para saída JSON
         const systemInstruction = `Você é o Motor de Inteligência de Carreira. Extraia as informações do currículo anexado. Responda ESTRITAMENTE em formato JSON com a estrutura exata: { "resumo_profissional": "string", "habilidades": ["string"], "experiencias": [{"empresa": "string", "cargo": "string", "ano": "string"}], "formacao_academica": [{"instituicao": "string", "curso": "string", "ano": "string"}] }. Não adicione blocos de marcação markdown (\`\`\`json) ou textos adicionais fora do JSON.`;
 
-        // URL ATUALIZADA: Utilizando o modelo gemini-3.7-flash conforme Diretriz Técnica de 2026
-        const url = `https://generativelanguage.googleapis.com/v1beta/models/gemini-3.7-flash:generateContent?key=${apiKey}`;
+        // Payload idêntico para qualquer tentativa
+        const payloadData = {
+            system_instruction: { parts: [{ text: systemInstruction }] },
+            contents: [{
+                role: "user",
+                parts: [
+                    { inline_data: { mime_type: parsed.mimeType, data: parsed.data } },
+                    { text: "Extraia os dados estruturados deste currículo." }
+                ]
+            }],
+            generation_config: { response_mime_type: "application/json" }
+        };
 
-        const response = await fetch(url, {
-            method: 'POST',
-            headers: { 'Content-Type': 'application/json' },
-            body: JSON.stringify({
-                system_instruction: {
-                    parts: [{ text: systemInstruction }]
-                },
-                contents: [{
-                    role: "user",
-                    parts: [
-                        { inline_data: { mime_type: parsed.mimeType, data: parsed.data } },
-                        { text: "Extraia os dados estruturados deste currículo." }
-                    ]
-                }],
-                generation_config: {
-                    response_mime_type: "application/json"
+        // Padrão de Fallback: Tenta o 3.7-flash primeiro, se falhar, tenta o 3.1-pro-preview
+        const modelsToTry = ['gemini-3.7-flash', 'gemini-3.1-pro-preview'];
+        let geminiData = null;
+        let success = false;
+
+        for (const model of modelsToTry) {
+            const url = `https://generativelanguage.googleapis.com/v1beta/models/${model}:generateContent?key=${apiKey}`;
+            try {
+                const response = await fetch(url, {
+                    method: 'POST',
+                    headers: { 'Content-Type': 'application/json' },
+                    body: JSON.stringify(payloadData)
+                });
+
+                if (response.ok) {
+                    geminiData = await response.json();
+                    success = true;
+                    console.log(`Processamento IA bem-sucedido via modelo: ${model}`);
+                    break; // Sai do loop assim que der sucesso
+                } else {
+                    console.warn(`Tentativa com ${model} falhou com status ${response.status}. Iniciando Fallback...`);
                 }
-            })
-        });
+            } catch (networkError) {
+                console.error(`Erro de rede ao acessar ${model}:`, networkError);
+            }
+        }
 
-        const geminiData = await response.json();
-
-        if (!response.ok) {
-            console.error('Erro na API Gemini:', geminiData);
-            return res.status(500).json({ error: 'Erro na orquestração da IA. Verifique os logs.' });
+        if (!success || !geminiData) {
+            return res.status(503).json({ error: 'Os servidores da IA do Google estão temporariamente sobrecarregados. Por favor, aguarde alguns instantes e tente novamente.' });
         }
 
         const extractedText = geminiData.candidates[0].content.parts[0].text;
