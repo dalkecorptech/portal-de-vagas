@@ -19,7 +19,7 @@ const corsOptions = {
 };
 
 app.use(cors(corsOptions));
-app.use(express.json({ limit: '10mb' })); // Suporta o upload de arquivos Base64
+app.use(express.json({ limit: '10mb' })); // Limite para upload de Base64
 
 const pool = new Pool({
     connectionString: process.env.DATABASE_URL,
@@ -29,7 +29,7 @@ const pool = new Pool({
 const JWT_SECRET = process.env.JWT_SECRET || 'chave_secreta_super_segura_aqui';
 
 // ==========================================
-// MIDDLEWARES E UTILS
+// MIDDLEWARES E FUNÇÕES UTILITÁRIAS
 // ==========================================
 const authenticateToken = (req, res, next) => {
     const authHeader = req.headers['authorization'];
@@ -189,7 +189,7 @@ app.post('/api/curriculo', authenticateToken, requireRole('candidato'), async (r
 });
 
 // ==========================================
-// ROTA DE INTELIGÊNCIA ARTIFICIAL (GEMINI)
+// ROTA DE INTELIGÊNCIA ARTIFICIAL (GEMINI API)
 // ==========================================
 app.post('/api/ia/processar-curriculo', authenticateToken, requireRole('candidato'), async (req, res) => {
     const { arquivo_dados } = req.body;
@@ -207,53 +207,59 @@ app.post('/api/ia/processar-curriculo', authenticateToken, requireRole('candidat
         const apiKey = process.env.GEMINI_API_KEY;
         if (!apiKey) throw new Error('GEMINI_API_KEY não configurada no ambiente do Render.');
 
-        const systemInstruction = `Você é o Motor de Inteligência de Carreira. Extraia as informações do currículo anexado. Responda ESTRITAMENTE em formato JSON com a estrutura exata: { "resumo_profissional": "string", "habilidades": ["string"], "experiencias": [{"empresa": "string", "cargo": "string", "ano": "string"}], "formacao_academica": [{"instituicao": "string", "curso": "string", "ano": "string"}] }. Não adicione blocos de marcação markdown (\`\`\`json) ou textos adicionais fora do JSON.`;
+        const systemPrompt = `Você é o Motor de Inteligência de Carreira do Portal de Vagas. Extraia as informações do currículo anexado. Responda ESTRITAMENTE em formato JSON com a seguinte estrutura: { "resumo_profissional": "string", "habilidades": ["string"], "experiencias": [{"empresa": "string", "cargo": "string", "ano": "string"}], "formacao_academica": [{"instituicao": "string", "curso": "string", "ano": "string"}] }. Não inclua marcações de código markdown (como \`\`\`json).`;
 
-        const payloadData = {
-            system_instruction: { parts: [{ text: systemInstruction }] },
-            contents: [{
-                role: "user",
-                parts: [
-                    { inline_data: { mime_type: parsed.mimeType, data: parsed.data } },
-                    { text: "Extraia os dados estruturados deste currículo." }
-                ]
-            }],
-            generation_config: { response_mime_type: "application/json" }
-        };
-
-        // Fallback automático entre os modelos recomendados na Diretriz
-        const modelsToTry = ['gemini-3.7-flash', 'gemini-3.1-pro-preview'];
-        let geminiData = null;
+        // Lista de modelos suportados para resiliência (Fallback)
+        const models = ['gemini-1.5-flash', 'gemini-2.0-flash-exp', 'gemini-1.5-pro'];
+        let responseData = null;
         let success = false;
+        let lastErrorMsg = '';
 
-        for (const model of modelsToTry) {
+        for (const model of models) {
             const url = `https://generativelanguage.googleapis.com/v1beta/models/${model}:generateContent?key=${apiKey}`;
+            
             try {
                 const response = await fetch(url, {
                     method: 'POST',
                     headers: { 'Content-Type': 'application/json' },
-                    body: JSON.stringify(payloadData)
+                    body: JSON.stringify({
+                        contents: [{
+                            role: 'user',
+                            parts: [
+                                { inline_data: { mime_type: parsed.mimeType, data: parsed.data } },
+                                { text: systemPrompt }
+                            ]
+                        }],
+                        generationConfig: {
+                            responseMimeType: 'application/json'
+                        }
+                    })
                 });
 
-                if (response.ok) {
-                    geminiData = await response.json();
+                const data = await response.json();
+
+                if (response.ok && data.candidates && data.candidates[0].content.parts[0].text) {
+                    responseData = data;
                     success = true;
-                    console.log(`IA executada com sucesso via modelo: ${model}`);
+                    console.log(`[IA SUCCESS] Processado com sucesso via modelo: ${model}`);
                     break;
                 } else {
-                    console.warn(`Tentativa com ${model} retornou status ${response.status}. Iniciando Fallback...`);
+                    lastErrorMsg = JSON.stringify(data);
+                    console.warn(`[IA FALLBACK] Modelo ${model} falhou:`, lastErrorMsg);
                 }
             } catch (err) {
-                console.error(`Erro de conexão com o modelo ${model}:`, err);
+                lastErrorMsg = err.message;
+                console.error(`[IA ERROR] Falha de conexão com ${model}:`, err);
             }
         }
 
-        if (!success || !geminiData) {
-            return res.status(503).json({ error: 'Servidores da IA indisponíveis no momento. Tente novamente em instantes.' });
+        if (!success || !responseData) {
+            console.error('[IA FAILURE FINAL]', lastErrorMsg);
+            return res.status(503).json({ error: 'Não foi possível analisar o documento no momento. Por favor, tente novamente em alguns instantes.' });
         }
 
-        const extractedText = geminiData.candidates[0].content.parts[0].text;
-        const curriculoJSON = JSON.parse(extractedText);
+        const rawText = responseData.candidates[0].content.parts[0].text;
+        const curriculoJSON = JSON.parse(rawText);
 
         res.json({
             message: 'Análise multimodal concluída com sucesso.',
@@ -261,8 +267,8 @@ app.post('/api/ia/processar-curriculo', authenticateToken, requireRole('candidat
         });
 
     } catch (error) {
-        console.error('Erro no processamento da rota de IA:', error);
-        res.status(500).json({ error: 'Falha interna ao analisar o currículo com Inteligência Artificial.' });
+        console.error('Erro no processamento interno de IA:', error);
+        res.status(500).json({ error: 'Falha ao processar a resposta da Inteligência Artificial.' });
     }
 });
 
