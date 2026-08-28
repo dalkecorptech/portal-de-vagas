@@ -34,6 +34,7 @@ const JWT_SECRET = process.env.JWT_SECRET || 'chave_secreta_super_segura_aqui';
 const authenticateToken = (req, res, next) => {
     const authHeader = req.headers['authorization'];
     const token = authHeader && authHeader.split(' ')[1];
+
     if (!token) return res.status(401).json({ error: 'Acesso negado. Token não fornecido.' });
 
     jwt.verify(token, JWT_SECRET, (err, user) => {
@@ -63,9 +64,11 @@ const parseBase64 = (dataUri) => {
 // ==========================================
 app.post('/api/auth/cadastro', async (req, res) => {
     const { email, senha, tipo_usuario, nome, documento } = req.body;
+
     if (!email || !senha || !tipo_usuario || !nome || !documento) {
         return res.status(400).json({ error: 'Todos os campos são obrigatórios para o cadastro.' });
     }
+
     if (!['candidato', 'empresa'].includes(tipo_usuario)) {
         return res.status(400).json({ error: 'Tipo de usuário inválido.' });
     }
@@ -73,6 +76,7 @@ app.post('/api/auth/cadastro', async (req, res) => {
     const client = await pool.connect();
     try {
         await client.query('BEGIN');
+        
         const emailCheck = await client.query('SELECT id FROM usuarios WHERE email = $1', [email]);
         if (emailCheck.rows.length > 0) throw new Error('Este e-mail já está em uso.');
 
@@ -112,6 +116,7 @@ app.post('/api/auth/cadastro', async (req, res) => {
 
 app.post('/api/auth/login', async (req, res) => {
     const { email, senha } = req.body;
+
     if (!email || !senha) return res.status(400).json({ error: 'E-mail e senha são obrigatórios.' });
 
     try {
@@ -120,9 +125,11 @@ app.post('/api/auth/login', async (req, res) => {
 
         const usuario = userResult.rows[0];
         const senhaValida = await bcrypt.compare(senha, usuario.senha);
+        
         if (!senhaValida) return res.status(401).json({ error: 'Credenciais inválidas.' });
 
         const token = jwt.sign({ id: usuario.id, tipo_usuario: usuario.tipo_usuario }, JWT_SECRET, { expiresIn: '24h' });
+        
         res.json({ message: 'Login bem-sucedido!', token: token, usuario: { id: usuario.id, email: usuario.email, tipo_usuario: usuario.tipo_usuario } });
     } catch (error) {
         console.error('Erro no login:', error);
@@ -139,6 +146,7 @@ app.get('/api/curriculo', authenticateToken, requireRole('candidato'), async (re
         if (candidatoResult.rows.length === 0) return res.status(404).json({ error: 'Candidato não encontrado.' });
 
         const curriculoResult = await pool.query('SELECT candidato_id, resumo_profissional, habilidades, experiencias, formacao_academica, arquivo_nome FROM curriculos WHERE candidato_id = $1', [candidatoResult.rows[0].id]);
+        
         res.json({ curriculo: curriculoResult.rows[0] || null });
     } catch (error) {
         console.error('Erro ao buscar currículo:', error);
@@ -148,10 +156,11 @@ app.get('/api/curriculo', authenticateToken, requireRole('candidato'), async (re
 
 app.post('/api/curriculo', authenticateToken, requireRole('candidato'), async (req, res) => {
     const { resumo_profissional, habilidades, experiencias, formacao_academica, arquivo_nome, arquivo_dados } = req.body;
+
     try {
         const candidatoResult = await pool.query('SELECT id FROM candidatos WHERE usuario_id = $1', [req.user.id]);
         if (candidatoResult.rows.length === 0) return res.status(404).json({ error: 'Candidato não encontrado.' });
-
+        
         const candidatoId = candidatoResult.rows[0].id;
         const habArray = Array.isArray(habilidades) ? habilidades : [];
 
@@ -208,9 +217,9 @@ app.post('/api/ia/processar-curriculo', authenticateToken, requireRole('candidat
         if (!apiKey) throw new Error('GEMINI_API_KEY não configurada no ambiente do Render.');
 
         const systemPrompt = `Você é o Motor de Inteligência de Carreira do Portal de Vagas. Extraia as informações do currículo anexado. Responda ESTRITAMENTE em formato JSON com a seguinte estrutura: { "resumo_profissional": "string", "habilidades": ["string"], "experiencias": [{"empresa": "string", "cargo": "string", "ano": "string"}], "formacao_academica": [{"instituicao": "string", "curso": "string", "ano": "string"}] }. Não inclua marcações de código markdown (como \`\`\`json).`;
-
-        // Lista de modelos suportados para resiliência (Fallback)
-        const models = ['gemini-1.5-flash', 'gemini-2.0-flash-exp', 'gemini-1.5-pro'];
+        
+        // CORREÇÃO: Atualizado para os modelos de 2026 para evitar o erro 404
+        const models = ['gemini-3.7-flash', 'gemini-3.6-flash'];
         let responseData = null;
         let success = false;
         let lastErrorMsg = '';
@@ -265,7 +274,6 @@ app.post('/api/ia/processar-curriculo', authenticateToken, requireRole('candidat
             message: 'Análise multimodal concluída com sucesso.',
             curriculo_extraido: curriculoJSON
         });
-
     } catch (error) {
         console.error('Erro no processamento interno de IA:', error);
         res.status(500).json({ error: 'Falha ao processar a resposta da Inteligência Artificial.' });
@@ -277,6 +285,7 @@ app.post('/api/ia/processar-curriculo', authenticateToken, requireRole('candidat
 // ==========================================
 app.post('/api/vagas', authenticateToken, requireRole('empresa'), async (req, res) => {
     const { titulo, descricao, requisitos, salario_min, salario_max, cidade, estado } = req.body;
+
     try {
         const empresaResult = await pool.query('SELECT id FROM empresas WHERE usuario_id = $1', [req.user.id]);
         if (empresaResult.rows.length === 0) return res.status(404).json({ error: 'Empresa não encontrada.' });
@@ -285,6 +294,7 @@ app.post('/api/vagas', authenticateToken, requireRole('empresa'), async (req, re
             `INSERT INTO vagas (empresa_id, titulo, descricao, requisitos, salario_min, salario_max, cidade, estado, tipo_vaga) VALUES ($1, $2, $3, $4, $5, $6, $7, $8, 'direta') RETURNING *`,
             [empresaResult.rows[0].id, titulo, descricao, requisitos, salario_min, salario_max, cidade, estado]
         );
+
         res.status(201).json({ message: 'Vaga publicada com sucesso!', vaga: insertVaga.rows[0] });
     } catch (error) {
         console.error('Erro ao publicar vaga:', error);
@@ -300,6 +310,7 @@ app.get('/api/vagas', async (req, res) => {
 
     if (busca) { query += ` AND v.titulo ILIKE $${paramIndex}`; params.push(`%${busca}%`); paramIndex++; }
     if (cidade) { query += ` AND v.cidade ILIKE $${paramIndex}`; params.push(`%${cidade}%`); paramIndex++; }
+    
     query += ' ORDER BY v.data_publicacao DESC';
 
     try {
@@ -315,10 +326,10 @@ app.get('/api/empresa/vagas', authenticateToken, requireRole('empresa'), async (
     try {
         const empresaResult = await pool.query('SELECT id FROM empresas WHERE usuario_id = $1', [req.user.id]);
         if (empresaResult.rows.length === 0) return res.status(404).json({ error: 'Empresa não encontrada.' });
-
+        
         const empresaId = empresaResult.rows[0].id;
         const result = await pool.query('SELECT * FROM vagas WHERE empresa_id = $1 ORDER BY data_publicacao DESC', [empresaId]);
-
+        
         res.json(result.rows);
     } catch (error) {
         console.error('Erro ao buscar vagas da empresa:', error);
