@@ -19,7 +19,7 @@ const corsOptions = {
 };
 
 app.use(cors(corsOptions));
-app.use(express.json({ limit: '10mb' })); // Limite para upload de Base64
+app.use(express.json({ limit: '10mb' })); // Limite otimizado para Base64
 
 const pool = new Pool({
     connectionString: process.env.DATABASE_URL,
@@ -214,11 +214,11 @@ app.post('/api/ia/processar-curriculo', authenticateToken, requireRole('candidat
 
     try {
         const apiKey = process.env.GEMINI_API_KEY;
-        if (!apiKey) throw new Error('GEMINI_API_KEY não configurada no ambiente do Render.');
+        if (!apiKey) throw new Error('GEMINI_API_KEY não configurada nas variáveis de ambiente do Render.');
 
         const systemPrompt = `Você é o Motor de Inteligência de Carreira do Portal de Vagas. Extraia as informações do currículo anexado. Responda ESTRITAMENTE em formato JSON com a seguinte estrutura: { "resumo_profissional": "string", "habilidades": ["string"], "experiencias": [{"empresa": "string", "cargo": "string", "ano": "string"}], "formacao_academica": [{"instituicao": "string", "curso": "string", "ano": "string"}] }. Não inclua marcações de código markdown (como \`\`\`json).`;
         
-        // CORREÇÃO: Atualizado para os modelos de 2026 para evitar o erro 404
+        // Modelos atualizados da geração 2026 para sanar o erro 404
         const models = ['gemini-3.7-flash', 'gemini-3.6-flash'];
         let responseData = null;
         let success = false;
